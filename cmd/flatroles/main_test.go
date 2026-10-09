@@ -141,3 +141,12 @@ func TestHandler_BadJSON_400(t *testing.T) {
 		t.Fatalf("want 400, got %d", res.StatusCode)
 	}
 }
+
+func TestHandler_BodyTooLarge_400(t *testing.T) {
+	// Exceed maxBody (1 MiB): MaxBytesReader makes io.ReadAll error before decode.
+	big := strings.Repeat("a", maxBody+10)
+	res, _ := post(t, newMux("roles", ""), big, nil)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for oversized body, got %d", res.StatusCode)
+	}
+}

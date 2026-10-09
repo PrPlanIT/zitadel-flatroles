@@ -93,6 +93,23 @@ func TestValidate_NoSignaturePart(t *testing.T) {
 	}
 }
 
+func TestValidate_MalformedV1Ignored(t *testing.T) {
+	// A garbage v1 part alongside a valid one must be skipped (hex-decode fails →
+	// continue), not rejected as structural, and the valid signature still wins.
+	body := []byte(`{"ok":true}`)
+	hdr := ComputeHeader(time.Now(), body, goldenKey) + ",v1=nothex"
+	if err := Validate(body, hdr, goldenKey); err != nil {
+		t.Fatalf("expected valid despite a malformed extra v1, got %v", err)
+	}
+}
+
+func TestValidate_OnlyMalformedV1(t *testing.T) {
+	// Valid timestamp but the sole v1 is non-hex → no usable signatures.
+	if err := Validate([]byte(`{}`), "t=1700000000,v1=zz", goldenKey); !errors.Is(err, ErrNoValidSignature) {
+		t.Fatalf("want ErrNoValidSignature, got %v", err)
+	}
+}
+
 func TestValidate_MultipleSignaturesOneMatches(t *testing.T) {
 	body := []byte(`{"a":1}`)
 	now := time.Now()

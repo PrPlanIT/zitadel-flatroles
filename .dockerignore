@@ -4,3 +4,21 @@
 README.md
 deploy
 docs
+
+# Keep credentials/keys out of the build context — the build stage does `COPY . .`,
+# so anything matched here can never end up in an image layer.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*_rsa
+*_ed25519
+.env
+.env.*
+.aws
+.kube
+.ssh
+.netrc
+.npmrc
+.pypirc
