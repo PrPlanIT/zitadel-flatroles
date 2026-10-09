@@ -2,12 +2,16 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
 
+	"github.com/PrPlanIT/zitadel-flatroles/src/signing"
 	"github.com/PrPlanIT/zitadel-flatroles/src/version"
 )
+
+const maxBody = 1 << 20
 
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
@@ -52,10 +56,10 @@ func rolesFrom(p map[string]any) []string {
 	return out
 }
 
-func main() {
-	addr := ":" + env("PORT", "8080")
-	claim := env("CLAIM_NAME", "roles")
-
+// newMux builds the HTTP handler. When signingKey is non-empty, every POST to
+// the target endpoint must carry a valid ZITADEL-Signature header; otherwise
+// request-signature verification is disabled (network-layer authz only).
+func newMux(claim, signingKey string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
@@ -65,8 +69,22 @@ func main() {
 			http.NotFound(w, r)
 			return
 		}
+		// Read the raw body first: the signature is computed over these exact
+		// bytes, so verification must happen before (and decode after) it.
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if signingKey != "" {
+			if err := signing.Validate(body, r.Header.Get(signing.SigningHeader), signingKey); err != nil {
+				log.Printf("rejected unsigned/invalid request: %v", err)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+		}
 		var p map[string]any
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&p); err != nil {
+		if err := json.Unmarshal(body, &p); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -85,7 +103,19 @@ func main() {
 		}
 		log.Printf("%s: %d roles", fn, len(roles))
 	})
+	return mux
+}
 
-	log.Printf("flatroles %s (%s) listening on %s (claim=%s)", version.Version, version.Commit, addr, claim)
-	log.Fatal(http.ListenAndServe(addr, mux))
+func main() {
+	addr := ":" + env("PORT", "8080")
+	claim := env("CLAIM_NAME", "roles")
+	signingKey := os.Getenv("SIGNING_KEY")
+
+	verify := "ENABLED"
+	if signingKey == "" {
+		verify = "DISABLED (network-layer authz only)"
+	}
+	log.Printf("flatroles %s (%s) listening on %s (claim=%s, signature-verify=%s)",
+		version.Version, version.Commit, addr, claim, verify)
+	log.Fatal(http.ListenAndServe(addr, newMux(claim, signingKey)))
 }
