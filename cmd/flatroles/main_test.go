@@ -173,7 +173,9 @@ const payload = `{"function":"function/preuserinfo","user":{"id":"u1"},
   {"project_id":"ipam","roles":["admin"]},
   {"project_id":"security","roles":["group-prplanit"],"state":1},
   {"project_id":"security","roles":["revoked"],"state":2},
-  {"project_id":"security","roles":["gone"],"state":3}]}`
+  {"project_id":"security","roles":["gone"],"state":3},
+  {"project_id":"security","roles":["named-inactive"],"state":"USER_GRANT_STATE_INACTIVE"},
+  {"project_id":"security","roles":["named-active"],"state":"USER_GRANT_STATE_ACTIVE"}]}`
 
 func scopedMode(m mode, claims ...string) config {
 	return config{claims: claims, mode: m, dir: fakeDir{m: map[string]string{"wazuh-client": "security"}, ready: true}}
@@ -185,7 +187,7 @@ func TestGrantsFrom_SkipsInactiveAndRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := flatten(grantsFrom(p), nil)
-	want := []string{"operator", "admin", "group-prplanit"}
+	want := []string{"operator", "admin", "group-prplanit", "named-active"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -193,7 +195,7 @@ func TestGrantsFrom_SkipsInactiveAndRemoved(t *testing.T) {
 
 func TestProjectMode_EmitsOnlyTheAppsProject(t *testing.T) {
 	_, body := post(t, newMux(scopedMode(modeProject, "roles")), payload, nil)
-	want := `{"append_claims":[{"key":"roles","value":["operator","group-prplanit"]}]}`
+	want := `{"append_claims":[{"key":"roles","value":["operator","group-prplanit","named-active"]}]}`
 	if strings.TrimSpace(body) != want {
 		t.Fatalf("body=%s want=%s", body, want)
 	}
@@ -217,7 +219,7 @@ func TestProjectMode_NoClientIDEmitsNothing(t *testing.T) {
 
 func TestReportMode_EmitsEverything(t *testing.T) {
 	_, body := post(t, newMux(scopedMode(modeReport, "roles")), payload, nil)
-	want := `{"append_claims":[{"key":"roles","value":["operator","admin","group-prplanit"]}]}`
+	want := `{"append_claims":[{"key":"roles","value":["operator","admin","group-prplanit","named-active"]}]}`
 	if strings.TrimSpace(body) != want {
 		t.Fatalf("body=%s want=%s", body, want)
 	}
@@ -225,7 +227,7 @@ func TestReportMode_EmitsEverything(t *testing.T) {
 
 func TestMultipleClaimNames(t *testing.T) {
 	_, body := post(t, newMux(scopedMode(modeProject, "roles", "groups")), payload, nil)
-	want := `{"append_claims":[{"key":"roles","value":["operator","group-prplanit"]},{"key":"groups","value":["operator","group-prplanit"]}]}`
+	want := `{"append_claims":[{"key":"roles","value":["operator","group-prplanit","named-active"]},{"key":"groups","value":["operator","group-prplanit","named-active"]}]}`
 	if strings.TrimSpace(body) != want {
 		t.Fatalf("body=%s want=%s", body, want)
 	}

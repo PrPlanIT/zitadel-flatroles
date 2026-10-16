@@ -84,7 +84,7 @@ func grantsFrom(p map[string]any) []grant {
 		if !ok {
 			continue
 		}
-		if s, ok := g["state"].(float64); ok && (s == grantInactive || s == grantRemoved) {
+		if inactive(g["state"]) {
 			continue
 		}
 		var keys []any
@@ -103,6 +103,18 @@ func grantsFrom(p map[string]any) []grant {
 		out = append(out, gr)
 	}
 	return out
+}
+
+// inactive reports whether a grant state is inactive or removed, in either the numeric
+// form the Actions payload carries or the enum-name form the Zitadel API uses.
+func inactive(state any) bool {
+	switch s := state.(type) {
+	case float64:
+		return s == grantInactive || s == grantRemoved
+	case string:
+		return s == "USER_GRANT_STATE_INACTIVE" || s == "USER_GRANT_STATE_REMOVED"
+	}
+	return false
 }
 
 // flatten returns the de-duplicated role keys of the grants keep accepts, in order of
