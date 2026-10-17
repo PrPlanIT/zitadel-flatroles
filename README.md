@@ -1,9 +1,9 @@
 # zitadel-flatroles
 
 **FlatRoles** — a tiny Go HTTP target for **Zitadel Actions v2**. Zitadel calls it on
-`preuserinfo` / `preaccesstoken`; it returns a flat, de-duplicated `roles` claim holding the
-role keys the user is granted **in the requesting application's own project**, so
-downstream applications can map a user to groups from a simple string array.
+`preuserinfo` / `preaccesstoken`; it returns a flat, de-duplicated `roles` claim built
+from every role key in the grants Zitadel sends with the call, so downstream applications
+can map a user to groups from a simple string array.
 
 <!-- sf:project:start -->
 [![GitHub](https://img.shields.io/badge/GitHub-mirror-181717?logo=github)](https://github.com/PrPlanIT/zitadel-flatroles) [![GitLab](https://img.shields.io/badge/GitLab-source-FC6D26?logo=gitlab)](https://gitlab.prplanit.com/PrPlanIT/zitadel-flatroles) [![license](https://raw.githubusercontent.com/PrPlanIT/zitadel-flatroles/main/.stagefreight/scribe/license.svg)](https://github.com/PrPlanIT/zitadel-flatroles/blob/main/LICENSE) [![Open Issues](https://img.shields.io/github/issues/PrPlanIT/zitadel-flatroles)](https://github.com/PrPlanIT/zitadel-flatroles/issues) [![Open PRs](https://img.shields.io/github/issues-pr/PrPlanIT/zitadel-flatroles)](https://github.com/PrPlanIT/zitadel-flatroles/pulls) [![Contributors](https://img.shields.io/github/contributors/PrPlanIT/zitadel-flatroles)](https://github.com/PrPlanIT/zitadel-flatroles/graphs/contributors) [![donate](https://img.shields.io/badge/donate-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/T6T41IT163) [![sponsor](https://img.shields.io/badge/sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/PrPlanIT)
@@ -36,6 +36,27 @@ that flat shape with a custom claim via an Action
 This runs that as a v2 **target** (an external HTTP endpoint this binary serves) rather
 than the legacy v1 embedded JS action, so the logic is versioned, tested, and image-pinned
 instead of living as pasted JavaScript in the Zitadel console.
+
+### Which grants arrive — Zitadel scopes them per application
+
+The binary does no filtering of its own: Zitadel has already chosen the grants. The
+payload's `user_grants` holds only the user's **active** grants on the projects in the
+token's **role audience** (`state = 1` and `project_id = any(<role audience>)` in
+Zitadel's `userinfo_by_id.sql`). The role audience is built in `prepareRoles`
+(`internal/api/oidc/userinfo.go`):
+
+- the requesting application's own project, whenever roles are asserted for the request
+  (always on the userinfo endpoint; for tokens when the project asserts roles, or the client
+  requests project roles or other project audiences), and
+- every project the client asks for with the
+  `urn:zitadel:iam:org:project:id:{projectId}:aud` scope.
+
+A `urn:zitadel:iam:org:id:{orgId}` scope further limits the grants to that organization.
+
+So the flat array is already per application: a key means the role on the app's own
+project, or on a project the app explicitly requested — never a grant the user holds on an
+unrelated project. The same small set of keys (`operator`, `admin`, `user`, …) can be
+reused in every project without prefixes.
 
 ### Security note — resource-org vs. external-org actions
 
@@ -71,33 +92,6 @@ request itself, in-process and independent of network posture — the only thing
 between a caller and a forged `roles` claim if that network boundary is ever misconfigured
 or absent.
 
-## Scoping — one role ladder, many projects
-
-A flat array drops the project each role came from. Flatten *every* grant and a key like
-`admin` stops meaning "admin of this app" and starts meaning "admin of anything": a user who
-is `admin` of one project and `user` of another signs in to the second app as `admin`.
-
-So by default (`MODE=project`) the claim carries only the roles granted in the project that
-owns the requesting application. The same small set of keys (`operator`, `admin`, `user`, …)
-can then be reused in every project, and each project's grants decide each app's access —
-no per-app key prefixes.
-
-Zitadel's payload names the application only by `client_id`, while each grant names its
-`project_id`, so the binary keeps a client → project directory read from the Zitadel API
-(every organization, every project, every application). It resyncs every
-`RESYNC_INTERVAL`, and early — at most once a minute — when it meets a client it has not
-seen, such as an application created since the last sync. Until the first sync succeeds,
-`/readyz` answers `503`. A client the directory cannot place gets no roles.
-
-The token needs read access to every organization's projects and applications; a machine
-user with the instance role `IAM_OWNER_VIEWER` and a personal access token is enough.
-
-`MODE=report` emits every grant, exactly like `MODE=all`, and logs per request what
-`MODE=project` would drop. Run it against real sign-ins before switching, to find any
-application that depends on a role granted in another project. Fix those by granting the
-role in the application's own project (or moving the application into the project whose
-grants it should follow), not by widening the claim.
-
 ## References
 
 - [Actions v2 (concepts)](https://zitadel.com/docs/concepts/features/actions_v2) — Target +
@@ -108,16 +102,18 @@ grants it should follow), not by widening the claim.
   — the `ZITADEL-Signature` HMAC header and how a target validates it.
 - [Using Actions](https://zitadel.com/docs/guides/integrate/actions/usage) — creating the
   Target (and retrieving its signing key) and wiring the Execution.
+- [Claims](https://zitadel.com/docs/apis/openidoauth/claims) and
+  [Scopes](https://zitadel.com/docs/apis/openidoauth/scopes) — the role claims and the
+  `urn:zitadel:iam:org:project:id:{projectId}:aud` / `urn:zitadel:iam:org:id:{orgId}` scopes
+  that shape the role audience.
 - [zitadel/zitadel#9141](https://github.com/zitadel/zitadel/issues/9141) — resource-org vs.
   external-org Action execution and the role-injection risk.
 
 ## Contract
 
-- `GET /healthz` → `ok` (liveness)
-- `GET /readyz` → `ok` once the client directory has synced, `503` before (always `ok` in
-  `MODE=all`)
-- `POST /` (the Zitadel v2 target) → `{"append_claims":[{"key":"roles","value":[...]}]}`,
-  one entry per name in `CLAIM_NAMES` (empty `{}` when the user holds no roles)
+- `GET /healthz` → `ok`
+- `POST /` (the Zitadel v2 target) → `{"append_claims":[{"key":"roles","value":[...]}]}`
+  (empty `{}` when the user holds no roles)
 
 Caller auth: set `SIGNING_KEY` to verify the `ZITADEL-Signature` HMAC in-process;
 otherwise the binary authenticates no caller and must be fronted by a network control. See
@@ -128,10 +124,5 @@ otherwise the binary authenticates no caller and must be fronted by a network co
 | env | default | meaning |
 |-----|---------|---------|
 | `PORT` | `8080` | listen port |
-| `CLAIM_NAMES` | `roles` | comma-separated claim keys, each carrying the same array (e.g. `roles,groups` for consumers that only read `groups`). Replaces `CLAIM_NAME`, which is now refused. |
-| `MODE` | `project` | `project`: roles from the requesting application's project only. `report`: every grant's roles, logging what `project` would drop. `all`: every grant's roles. |
-| `ZITADEL_API_URL` | _(required unless `MODE=all`)_ | Zitadel base URL the client directory reads from, e.g. the in-cluster service `http://zitadel.<ns>.svc.cluster.local:8080` |
-| `ZITADEL_HOST` | _(unset)_ | Host header to send, when `ZITADEL_API_URL` is not the instance's own domain (Zitadel routes by domain) |
-| `ZITADEL_TOKEN` | _(required unless `MODE=all`)_ | token with instance-wide read access to organizations, projects and applications |
-| `RESYNC_INTERVAL` | `5m` | how often the client directory is rebuilt |
+| `CLAIM_NAME` | `roles` | claim key appended to the token |
 | `SIGNING_KEY` | _(unset)_ | Target signing key; when set, the `ZITADEL-Signature` HMAC is verified and bad/stale requests get `401`. Unset = in-process verification off (network control only). |
