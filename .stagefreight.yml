@@ -39,7 +39,6 @@ metadata:
   description:
     - Zitadel Actions v2 target that flattens granted roles into a flat roles token claim.
     - HTTP target Zitadel calls on preuserinfo/preaccesstoken; returns a de-duplicated flat roles claim the kube-apiserver maps to groups.
-  license: MIT
   org: PrPlanIT
   title: Zitadel FlatRoles
   topics:
